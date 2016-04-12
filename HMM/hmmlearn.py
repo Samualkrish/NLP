@@ -2,7 +2,6 @@ from __future__ import division
 import sys
 import cPickle
 import time
-import json
 
 class Model:
     def __init__(self):
@@ -11,6 +10,7 @@ class Model:
         self.transition = {}
         self.tag = {}
         self.word = {}
+        self.word_tag = {}
         self.output = {}
         self.sentences = []
 
@@ -19,36 +19,53 @@ class Model:
             self.sentences = f.read().splitlines()
 
     def add_to_emission(self, tag, word):
-        if tag in self.emission:
-            if word in self.emission[tag]:
-                self.emission[tag][word] += 1
-            else:
-                self.emission[tag][word] = 1
-        else:
-            self.emission[tag] = {word:1}
+        try:
+            try:
+                self.emission[word][tag] = self.emission[word][tag] + 1
+            except KeyError:
+                self.emission[word][tag] = 1
+        except KeyError:
+            self.emission[word] = {tag:1}
+
+    def add_to_tag(self,tag):
+        try:
+            self.tag[tag] = self.tag[tag] + 1
+        except KeyError:
+            self.tag[tag] = 1
+
+    def add_to_word_tag(self, word, tag):
+        try:
+            self.word_tag[word][tag] = 0
+        except KeyError:
+            self.word_tag[word] = {tag:0}
 
     def add_to_transition(self, current_tag, next_tag):
-        if current_tag in self.transition:
-            if next_tag in self.transition[current_tag]:
-                self.transition[current_tag][next_tag] += 1
-            else:
+        try:
+            try:
+                self.transition[current_tag][next_tag] = self.transition[current_tag][next_tag] + 1
+            except KeyError:
                 self.transition[current_tag][next_tag] = 1
-        else:
+        except KeyError:
             self.transition[current_tag] = {next_tag:1}
 
+    def add_unknown(self):
+        
+            for j in self.tag:
+                try:
+                    self.emission["*U*"][j] = 1
+                except KeyError:
+                    self.emission["*U*"] = {j:1}
+
     def build_semantics(self):
-        self.tag['s'] = 0
-        self.tag['t'] = 0
         for line in self.sentences:
-            current_pos = 's'
+            #Add the emission matrix for start state
+            current_pos = 'ss'
             word_pos = line.split()
             for word in word_pos:
                 w = word[0:-3]
                 t = word[-2:]
-                if t not in self.tag:
-                    self.tag[t] = 0
-                if w not in self.word:    
-                    self.word[w] = 0
+                
+                self.add_to_tag(t)
 
                 # Add to the emission matrix
                 self.add_to_emission(t,w)
@@ -58,57 +75,47 @@ class Model:
                 self.add_to_transition(current_pos,next_pos)
                 current_pos = next_pos
             #Add the transition matrix for terminal state
-            next_pos = 't'
+            next_pos = 'tt'
             self.add_to_transition(current_pos,next_pos)
-
-    def build_emission(self):
-        for line in self.sentences:
-            word_pos = line.split()
-            for word in word_pos:
-                w = word[0:-3]
-                t = word[-2:]
-                if w in self.emission[t]:
-                    self.emission[t][w] += 1
-                else:
-                    self.emission[t][w] = 1
-        
-    def build_transition(self):
-        '''Builds the transition probability matrix.'''
-
-        for line in self.sentences:
-            word_pos = line.split()
-            current_pos = 's'
-            for word in word_pos:
-                next_pos = word[-2:]
-                self.transition[current_pos][next_pos] += 1 
-                current_pos = next_pos
-            next_pos = 't'
-            self.transition[current_pos][next_pos] += 1 
+        # self.add_unknown()
 
     def smooth_transition(self):
+        self.tag['tt'] = 0
         for i in self.transition:
-            self.transition[i]['total'] = 0
-            for j in self.tag:
-                if j == 's':
-                    self.transition[i][j] = 0
-                elif j not in self.transition[i]:
-                    self.transition[i][j] = 1
-                else:
-                    self.transition[i][j] += 1
-                self.transition[i]['total'] += self.transition[i][j]
-            for j in self.tag:
-                self.transition[i][j] = self.transition[i][j] / self.transition[i]['total']
+            try:
+                tag_total = self.tag[i]
+                for j in self.tag:
+                    len_tag = tag_total + len(self.tag)
+                    try:
+                        self.transition[i][j] = (self.transition[i][j] + 1) / len_tag
+                    except KeyError:
+                        self.transition[i][j] = 1 / len_tag
+            except KeyError:
+                continue
+        self.tag.pop('tt', None)
+        for j in self.tag:
+            len_tag = len(self.sentences)
+            try:
+                self.transition['ss'][j] = self.transition['ss'][j] / len_tag
+            except KeyError:
+                self.transition['ss'][j] = 1 / len_tag 
 
+
+    def smooth_emission(self):
+        for i in self.emission:
+            for j in self.emission[i]:
+                self.emission[i][j] = self.emission[i][j] / self.tag[j]
+        self.emission['*S*'] = {'ss':1}
 
     def build_output(self):
         self.output['emission'] = self.emission
         self.output['transition'] = self.transition
         self.output['tag'] = self.tag
-        self.output['word'] = self.word
 
     def create_hmm(self):
         self.build_semantics()
         self.smooth_transition()
+        self.smooth_emission()
         self.build_output()
 
     def write_to_output(self, file):
